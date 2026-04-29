@@ -11,7 +11,7 @@ import openmeteo_requests
 from urllib3.util.retry import Retry
 from requests.adapters import HTTPAdapter 
 
-def request_weather_data(start=datetime.datetime.today(), end=None,param="temperature_2m"):
+def request_weather_data(start=datetime.datetime.today(), end=None,hourly_params="temperature_2m", lat=48.3064, lon=14.2861):
     """
     Request weather data from the Open-Meteo API for a specific date range.
     Parameters:
@@ -31,12 +31,15 @@ def request_weather_data(start=datetime.datetime.today(), end=None,param="temper
     
     url = "https://archive-api.open-meteo.com/v1/archive"
     
+    paramStr = hourly_params if isinstance(hourly_params, str) else ",".join(hourly_params)
+          
+    
     params = {
-        "latitude": 48.3064,
-        "longitude": 14.2861,
+        "latitude": lat,
+        "longitude": lon,
         "start_date": start_date,
         "end_date": end_date,
-        "hourly": param,
+        "hourly": paramStr,
         "timezone": "Europe/Berlin"
     }
     
@@ -51,13 +54,26 @@ def request_weather_data(start=datetime.datetime.today(), end=None,param="temper
     hourly_data = data.get("hourly", {})
     timestamps = hourly_data.get("time", [])
     
-    results = []
+    results = {}
+    for param in hourly_params:
+        if param not in hourly_data:
+            print(f"Warning: '{param}' not found in response data")
+        results[param] = [] 
     
-    for timestamp in timestamps:
-        results.append((hourly_data[param][timestamps.index(timestamp)], timestamp))
+    # Convert hourly_params to list if it's a string
+    params_list = hourly_params if isinstance(hourly_params, list) else [hourly_params]
+    
+    for param in params_list:
+        if param in hourly_data:
+            param_values = hourly_data[param]
+            for idx, timestamp in enumerate(timestamps):
+                if idx < len(param_values):
+                    value = param_values[idx]
+                    if value is not None:
+                        results[param].append((value, timestamp))
     
     
-    print(results)
+    #print(results)
     
     return results
 
@@ -111,6 +127,13 @@ def request_awattar(start=datetime.datetime.today(),end=None,length_days=1):
 
 
 def plot_values_over_time(values, title="Values Over Time", ylabel="Value", filename="img/values_over_time.png",color="blue"):
+    
+    
+    for p in values:
+        if not isinstance(p, tuple) or len(p) != 2:
+            print(f"Error: Invalid data format for entry {p}. Expected a tuple of (value, timestamp).")
+            return
+    
     if not values:
         print("Error: No data to plot")
         return
@@ -131,6 +154,15 @@ def plot_values_over_time(values, title="Values Over Time", ylabel="Value", file
         print("Error: No valid timestamps to plot")
         return
     
+    # Filter out None values
+    times_values_pairs = [(t, v) for t, v in zip(times_dt, values) if v is not None]
+    if not times_values_pairs:
+        print("Error: No valid values to plot")
+        return
+    
+    times_dt = [t for t, v in times_values_pairs]
+    values = [v for t, v in times_values_pairs]
+    
     plt.figure(figsize=(10, 6), layout="constrained")
     
     plt.title(title)
@@ -140,7 +172,7 @@ def plot_values_over_time(values, title="Values Over Time", ylabel="Value", file
     start_time = min(times_dt)
     end_time = max(times_dt)
     
-    print(f"Start time: {start_time.strftime('%Y-%m-%d %H:%M:%S')}, End time: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    #print(f"Start time: {start_time.strftime('%Y-%m-%d %H:%M:%S')}, End time: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
     plt.xlim(start_time, end_time)
     
     plt.ylim(min(values) * 0.9, max(values) * 1.1)
@@ -231,7 +263,7 @@ def plot_multiple_values_combined(datasets, title="Combined Plot", filename="img
         start_time = min(all_times_dt)
         end_time = max(all_times_dt)
         ax1.set_xlim(start_time, end_time)
-        print(f"Start time: {start_time.strftime('%Y-%m-%d %H:%M:%S')}, End time: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        #print(f"Start time: {start_time.strftime('%Y-%m-%d %H:%M:%S')}, End time: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
     
     # Format x-axis timestamps
     ax1.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d %H:%M:%S'))
@@ -251,30 +283,81 @@ def plot_multiple_values_combined(datasets, title="Combined Plot", filename="img
     plt.savefig(filename, bbox_inches='tight')
     print(f"Combined plot saved to {filename}")
 
+
+def save_to_csv(data, filename="data.csv"):
+    df = pd.DataFrame(data, columns=["Value", "Timestamp"])
+    df.to_csv(filename, index=False)
+    print(f"Data saved to {filename}")
+
+
+def read_from_csv(filename="data.csv"):
+    df = pd.read_csv(filename)
+    return list(zip(df["Value"], df["Timestamp"]))
+
 if __name__ == "__main__":
     
-    START_DATE = "2026-04-20"
-    END_DATE = "2026-04-28"
-    LENGTH_DAYS = 1
+    # https://open-meteo.com/en/docs?bounding_box=-90,-180,90,180&hourly=temperature_2m,weather_code,relative_humidity_2m,apparent_temperature,rain,showers,precipitation_probability,snowfall,cloud_cover,cloud_cover_mid,cloud_cover_low,cloud_cover_high,visibility,wind_speed_10m,wind_speed_80m,wind_speed_120m,wind_speed_180m,wind_direction_10m,wind_direction_80m,wind_direction_120m,wind_direction_180m,temperature_80m,temperature_120m,temperature_180m
     
-    temparatur_data = request_weather_data(START_DATE, END_DATE, param="temperature_2m")
-    plot_values_over_time(temparatur_data, title="Temperature Over Time", ylabel="Temperature in °C", filename="img/temperature_over_time.png", color="red")
+    START_DATE = "2026-04-28"
+    END_DATE = "2026-04-29"
+    LENGTH_DAYS = 1
+    PUPU_PARK_LOCATION = { "latitude": 48.31189543738503, "longitude": 14.244101450717908 }
+    WEATHER_PARAMS = ["temperature_2m", "cloudcover", "windspeed_10m", "temperature_2m", "weather_code", "relative_humidity_2m", "apparent_temperature", "rain", "showers", "precipitation_probability", "snowfall", "cloud_cover", "cloud_cover_mid", "cloud_cover_low", "cloud_cover_high", "visibility", "wind_speed_10m", "wind_speed_80m", "wind_speed_120m", "wind_speed_180m", "wind_direction_10m", "wind_direction_80m", "wind_direction_120m", "wind_direction_180m", "temperature_80m", "temperature_120m", "temperature_180m"]
+    
 
     prices = request_awattar(START_DATE, END_DATE, length_days=LENGTH_DAYS)
-    plot_values_over_time(prices, title="Wattar Prices Over Time", ylabel="Price in Cent/kWh", filename="img/awattar_prices_over_time.png")
 
-    cloud_cover_data = request_weather_data(START_DATE, END_DATE, param="cloud_cover")
-    plot_values_over_time(cloud_cover_data, title="Cloud Cover Over Time", ylabel="Cloud Cover in %", filename="img/cloud_cover_over_time.png", color="yellow")
+    weather_data = request_weather_data(START_DATE, END_DATE, hourly_params=WEATHER_PARAMS, lat=PUPU_PARK_LOCATION["latitude"], lon=PUPU_PARK_LOCATION["longitude"])
+
+    save_to_csv(prices, filename="data/awattar_price_data.csv")
+    plot_values_over_time(prices, title="aWATTar Price Over Time", ylabel="Price (Cent/kWh)", filename="img/awattar_price_over_time.png", color="green")
 
     
+    for param in WEATHER_PARAMS:
+        if param in weather_data:
+            plot_values_over_time(weather_data[param], title=f"{param.capitalize()} Over Time", ylabel=param.capitalize(), filename=f"img/{param}_over_time.png", color="orange")
+    for param in WEATHER_PARAMS:
+        if param in weather_data:
+            save_to_csv(weather_data[param], filename=f"data/{param}_data.csv")
+   
+    datasets = []
+    colorlist = {
+        "temperature_2m": "red",
+        "cloudcover": "gray",
+        "windspeed_10m": "blue",
+        "weather_code": "purple",
+        "relative_humidity_2m": "cyan",
+        "apparent_temperature": "magenta",
+        "rain": "navy",
+        "showers": "teal",
+        "precipitation_probability": "olive",
+        "snowfall": "brown",
+        "cloud_cover": "lightgray",
+        "cloud_cover_mid": "darkgray",
+        "cloud_cover_low": "dimgray",
+        "cloud_cover_high": "gainsboro",
+        "visibility": "goldenrod",
+        "wind_speed_10m": "cornflowerblue",
+        "wind_speed_80m": "steelblue",
+        "wind_speed_120m": "royalblue",
+        "wind_speed_180m": "dodgerblue",
+        "wind_direction_10m": "sandybrown",
+        "wind_direction_80m": "peru",
+        "wind_direction_120m": "chocolate",
+        "wind_direction_180m": "sienna",
+        "temperature_80m": "salmon",
+        "temperature_120m": "lightcoral",
+        "temperature_180m": "indianred"
+    }
+    for param in WEATHER_PARAMS:
+        if param in weather_data:
+            color = colorlist[param] if param in colorlist else "orange"
+            datasets.append({'values': weather_data[param], 'label': param.capitalize(), 'color': color, 'ylabel': param.capitalize()})
+
     plot_multiple_values_combined(
-        datasets=[
-            {'values': prices, 'label': 'Price', 'color': 'green', 'ylabel': 'Price (Cent/kWh)'},
-            #{'values': temparatur_data, 'label': 'Temperature', 'color': 'red', 'ylabel': 'Temperature (°C)'},
-            {'values': cloud_cover_data, 'label': 'Cloud Cover', 'color': 'yellow', 'ylabel': 'Cloud Cover (%)'}
-        ],
-        title="Combined Plots",
-        filename="img/combined_plots.png"
+           datasets=datasets,
+       title="Combined Plots",
+       filename="img/combined_plots.png"
     )
 
     print("All tests passed!")
