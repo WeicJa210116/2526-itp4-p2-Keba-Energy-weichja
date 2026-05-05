@@ -3,3 +3,5 @@
 */img/*
 src/awattar_test/data/*
 src/awattar_test/img/*
+*.csv
+*.png

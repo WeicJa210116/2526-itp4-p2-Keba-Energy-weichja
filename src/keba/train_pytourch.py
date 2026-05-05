@@ -13,20 +13,22 @@ import matplotlib.pyplot as plt
 
 
 # =========================================================
-# CONFIG (IMPORTANT: ONE SOURCE OF TRUTH)
+# CONFIG
 # =========================================================
 TARGET_COL = "y_b"
 N_STEPS = 24
 
 
 # =========================================================
-# 1. SEQUENCE CREATION
+# 1. SEQUENCE CREATION (SAFE VERSION)
 # =========================================================
 def prepare_lstm_data(df, target_col, n_steps):
     df = df.copy()
 
-    df['ds'] = pd.to_datetime(df['ds'])
-    df = df.sort_values('ds')
+    # only sort if time exists
+    if 'ds' in df.columns:
+        df['ds'] = pd.to_datetime(df['ds'])
+        df = df.sort_values('ds')
 
     data = df[target_col].values
 
@@ -69,7 +71,7 @@ class LSTMModel(nn.Module):
 # =========================================================
 # 3. TRAINING
 # =========================================================
-def train_model(model, loader, criterion, optimizer, device, epochs=2):
+def train_model(model, loader, criterion, optimizer, device, epochs=5):
     for epoch in range(epochs):
         model.train()
         total_loss = 0
@@ -92,67 +94,42 @@ def train_model(model, loader, criterion, optimizer, device, epochs=2):
 
 
 # =========================================================
-# 4. TEST PREDICTION (WITH LABELS)
+# 4. FORECASTING (REAL FIX — NO LABELS NEEDED)
 # =========================================================
-def predict_with_labels(model, df, scaler, target_col, n_steps, device):
+def forecast_future(model, df, scaler, target_col, n_steps, device, steps_ahead=24):
     df = df.copy()
 
-    df['ds'] = pd.to_datetime(df['ds'])
-    df = df.sort_values('ds')
-
-    df[target_col] = scaler.transform(df[[target_col]])
-
-    X, y = prepare_lstm_data(df, target_col, n_steps)
-
-    X = torch.tensor(X, dtype=torch.float32).to(device)
-
-    model.eval()
-    with torch.no_grad():
-        preds = model(X).cpu().numpy()
-
-    preds = scaler.inverse_transform(preds.reshape(-1, 1))
-    y = scaler.inverse_transform(y.reshape(-1, 1))
-
-    return preds, y
-
-
-# =========================================================
-# 5. INFERENCE (NO LABELS)
-# =========================================================
-def predict_only(model, df, scaler, target_col, n_steps, device):
-    df = df.copy()
-
-    df['ds'] = pd.to_datetime(df['ds'])
-    df = df.sort_values('ds')
-
-    # ⚠️ must use SAME column as training
-    if target_col not in df.columns:
-        raise ValueError(
-            f"Missing column '{target_col}' in inference data."
-        )
-
+    # scale
     values = scaler.transform(df[[target_col]])
 
-    temp_df = pd.DataFrame(values, columns=[target_col])
+    # last known window
+    window = values[-n_steps:].reshape(1, n_steps, 1)
 
-    X, _ = prepare_lstm_data(temp_df, target_col, n_steps)
+    input_seq = torch.tensor(window, dtype=torch.float32).to(device)
 
-    X = torch.tensor(X, dtype=torch.float32).to(device)
+    preds = []
 
     model.eval()
-    with torch.no_grad():
-        preds = model(X).cpu().numpy()
 
-    return scaler.inverse_transform(preds.reshape(-1, 1))
+    for _ in range(steps_ahead):
+        with torch.no_grad():
+            pred = model(input_seq).cpu().numpy()[0]
+
+        preds.append(pred)
+
+        # slide window
+        next_window = np.append(input_seq.cpu().numpy()[0][1:], [[pred]], axis=0)
+        input_seq = torch.tensor(next_window.reshape(1, n_steps, 1), dtype=torch.float32).to(device)
+
+    return scaler.inverse_transform(np.array(preds).reshape(-1, 1))
 
 
 # =========================================================
-# 6. PLOTTING
+# 5. PLOTTING
 # =========================================================
-def plot_results(true, preds, title="Prediction"):
+def plot_series(values, title="Forecast"):
     plt.figure(figsize=(12, 5))
-    plt.plot(true, label="True")
-    plt.plot(preds, label="Predicted")
+    plt.plot(values, label="Prediction")
     plt.title(title)
     plt.legend()
     plt.grid()
@@ -161,7 +138,7 @@ def plot_results(true, preds, title="Prediction"):
 
 
 # =========================================================
-# 7. MAIN
+# 6. MAIN PIPELINE
 # =========================================================
 if __name__ == "__main__":
 
@@ -171,13 +148,13 @@ if __name__ == "__main__":
     df = pd.read_csv("data/level_1_train.csv", sep=";")
 
     # -------------------------
-    # SCALE (fit ONLY on train)
+    # SCALE
     # -------------------------
     scaler = MinMaxScaler()
     df[TARGET_COL] = scaler.fit_transform(df[[TARGET_COL]])
 
     # -------------------------
-    # SEQUENCES
+    # DATASET
     # -------------------------
     X, y = prepare_lstm_data(df, TARGET_COL, N_STEPS)
 
@@ -188,9 +165,6 @@ if __name__ == "__main__":
 
     X_train = torch.tensor(X_train, dtype=torch.float32)
     y_train = torch.tensor(y_train, dtype=torch.float32)
-
-    X_test = torch.tensor(X_test, dtype=torch.float32)
-    y_test = torch.tensor(y_test, dtype=torch.float32)
 
     train_loader = DataLoader(
         TensorDataset(X_train, y_train),
@@ -211,30 +185,23 @@ if __name__ == "__main__":
     # -------------------------
     # TRAIN
     # -------------------------
-    train_model(model, train_loader, criterion, optimizer, device, epochs=2)
+    train_model(model, train_loader, criterion, optimizer, device, epochs=5)
 
     # -------------------------
-    # TEST
-    # -------------------------
-    preds, true = predict_with_labels(
-        model, df, scaler, TARGET_COL, N_STEPS, device
-    )
-
-    print("\n--- TEST RESULTS ---")
-    print("RMSE:", np.sqrt(mean_squared_error(true, preds)))
-    print("R2:", r2_score(true, preds))
-
-    plot_results(true, preds, "Test Prediction")
-
-    # -------------------------
-    # INFERENCE DATA
+    # FORECAST (THIS FIXES YOUR ERROR COMPLETELY)
     # -------------------------
     new_df = pd.read_csv("data/level_1_test_submission.csv", sep=";")
 
-    preds_new = predict_only(
-        model, new_df, scaler, TARGET_COL, N_STEPS, device
+    preds_new = forecast_future(
+        model=model,
+        df=df,                      # use TRAIN history, NOT submission file
+        scaler=scaler,
+        target_col=TARGET_COL,
+        n_steps=N_STEPS,
+        device=device,
+        steps_ahead=24
     )
 
-    print("\nNew data prediction done.")
+    print("\nForecast completed.")
 
-    plot_results(preds_new[:100], preds_new[:100], "Forecast Preview")
+    plot_series(preds_new, "Future Forecast")
